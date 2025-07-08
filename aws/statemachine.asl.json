@@ -1,0 +1,29 @@
+{
+  "Comment": "GAS to Step Functions: Add two numbers and send result back to GAS",
+  "StartAt": "AddNumbers",
+  "States": {
+    "AddNumbers": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "AddFunction",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.AddResult",
+      "Next": "OutputToGAS"
+    },
+    "OutputToGAS": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "OutputToGASFunction",
+        "Payload": {
+          "row.$": "$.row",
+          "result.$": "$.AddResult.Payload.sum"
+        }
+      },
+      "End": true
+    }
+  }
+}
+

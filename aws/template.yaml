@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: REST API Service Proxy で Step Functions を呼び出す最小構成 (ResourcePolicy OK)
+
+Parameters:
+  SpreadsheetId:
+    Type: String
+    Description: Google Spreadsheet ID
+    Default: "1qJ8C5qOeWGy8gBx7C-kTmilkigvo1V2Z3eiAFJkt5iwV76IH2ne7Mhne"
+  SheetName:
+    Type: String
+    Description: Sheet name in the spreadsheet
+    Default: "入力シート"
+
+Resources:
+
+  ### Secrets Manager for Google Service Account Key
+  GoogleServiceAccountKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: gas-api-gateway/google-service-account-key
+      Description: Google Service Account Key for Sheets API access
+      SecretString: '{"placeholder": "will_be_updated_by_deploy_script"}'
+
+  ### Step Functions State Machine (Resource-based Policy 設定可)
+  MyStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaInvoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+
+  MyStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt MyStateMachineRole.Arn
+      Definition:
+        Comment: "State machine to add two numbers and call GAS"
+        StartAt: AddNumbers
+        States:
+          AddNumbers:
+            Type: Task
+            Resource: !GetAtt AddFunction.Arn
+            Next: OutputToGAS
+          OutputToGAS:
+            Type: Task
+            Resource: !GetAtt OutputToGASFunction.Arn
+            End: true
+
+  ### Lambda Functions
+  AddFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: AddFunction
+      Runtime: python3.11
+      Handler: app.lambda_handler
+      CodeUri: add/
+      Role: !GetAtt LambdaExecutionRole.Arn
+
+  OutputToGASFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: OutputToGASFunction
+      Runtime: python3.11
+      Handler: app.lambda_handler
+      CodeUri: output_to_gas/
+      Timeout: 60
+      Environment:
+        Variables:
+          SPREADSHEET_ID: !Ref SpreadsheetId
+          SHEET_NAME: !Ref SheetName
+      Role: !GetAtt LambdaExecutionRole.Arn
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref GoogleServiceAccountKeySecret
+
+  ### IAM Role for API Gateway → Step Functions
+  ApiGatewayToStepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartSFN
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !Ref MyStateMachine
+
+  ### API Gateway REST API
+  ApiGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: StepFunctionsProxyApi
+
+  ### API Resource (/execution)
+  ApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: execution
+
+  ### POST Method for /execution
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiGatewayResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:states:action/StartExecution
+        Credentials: !GetAtt ApiGatewayToStepFunctionsRole.Arn
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: !Sub |
+            {
+              "input": "$util.escapeJavaScript($input.body)",
+              "stateMachineArn": "${MyStateMachine}"
+            }
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: ''
+          - StatusCode: 400
+            SelectionPattern: '4\d{2}'
+          - StatusCode: 500
+            SelectionPattern: '5\d{2}'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  ### Deployment
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiGatewayMethod
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: prod
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL for POST /execution"
+    Value: !Sub https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/execution

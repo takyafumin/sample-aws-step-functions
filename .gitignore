@@ -1,0 +1,24 @@
+# GAS
+gas/.clasp.json
+gas/.clasp-local.json
+
+# AWS SAM ビルド成果物
+aws/.aws-sam/
+
+# Python 関連
+aws/**/__pycache__/
+venv/
+.venv/
+*.pyc
+
+# Google Service Account Key (機密情報)
+service-account-key.json
+
+# 設定ファイル
+config.json
+.env
+
+# OS, エディタ固有
+.DS_Store
+.idea/
+.vscode/settings.json
