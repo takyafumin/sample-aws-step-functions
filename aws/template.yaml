@@ -54,6 +54,10 @@ Resources:
           AddNumbers:
             Type: Task
             Resource: !GetAtt AddFunction.Arn
+            Next: WaitState
+          WaitState:
+            Type: Wait
+            Seconds: 5
             Next: OutputToGAS
           OutputToGAS:
             Type: Task
