@@ -10,10 +10,12 @@ def lambda_handler(event, context):
     row = event.get('row')
 
     result = valueA + valueB
+    skip_wait = result % 3 == 0
 
     # event は書き換えずに新しい dict を返す
     return {
         'statusCode': 200,
         'sum': result,
-        'row': row
+        'row': row,
+        'skipWait': skip_wait
     }

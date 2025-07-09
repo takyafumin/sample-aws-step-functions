@@ -48,13 +48,20 @@ Resources:
     Properties:
       RoleArn: !GetAtt MyStateMachineRole.Arn
       Definition:
-        Comment: "State machine to add two numbers and call GAS"
+        Comment: "State machine to add two numbers and call GAS with conditional wait"
         StartAt: AddNumbers
         States:
           AddNumbers:
             Type: Task
             Resource: !GetAtt AddFunction.Arn
-            Next: WaitState
+            Next: CheckDivisibleByThree
+          CheckDivisibleByThree:
+            Type: Choice
+            Choices:
+              - Variable: "$.skipWait"
+                BooleanEquals: true
+                Next: OutputToGAS
+            Default: WaitState
           WaitState:
             Type: Wait
             Seconds: 5
